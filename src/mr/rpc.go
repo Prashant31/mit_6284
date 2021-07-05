@@ -23,13 +23,13 @@ type MapTask struct {
 
 type ReduceTask struct {
 	IntermediateFiles []string
-	ReduceNumber int
+	ReduceNumber      int
 }
 
 type AcquireTaskReply struct {
-	MapTask *MapTask
+	MapTask    *MapTask
 	ReduceTask *ReduceTask
-	Done bool
+	Done       bool
 }
 
 type MapTaskDoneArgs struct {
@@ -39,7 +39,6 @@ type MapTaskDoneArgs struct {
 }
 
 type MapTaskDoneReply struct {
-
 }
 
 type ReduceTaskDoneArgs struct {
@@ -48,9 +47,7 @@ type ReduceTaskDoneArgs struct {
 }
 
 type ReduceTaskDoneReply struct {
-
 }
-
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.
