@@ -22,7 +22,7 @@ type TaskInfo struct {
 	status  TaskStatus
 	wid     int
 	StartTs int64
-	EndTs int64
+	EndTs   int64
 }
 
 type Tasks map[interface{}]*TaskInfo
@@ -41,7 +41,7 @@ type Master struct {
 func (m *Master) AcquireTask(args *AcquireTaskArgs, reply *AcquireTaskReply) error {
 	m.mu.Lock()
 
-	if m.WStatus[args.Wid]==""  {
+	if m.WStatus[args.Wid] == "" {
 		m.WStatus[args.Wid] = "IDLE"
 	}
 
@@ -161,7 +161,7 @@ func (m *Master) CheckAllMapTasksDone() bool {
 
 func (m *Master) PickReduceTask() *ReduceTask {
 	var reduceTask *ReduceTask = nil
-	for k, val := range m.RTasks{
+	for k, val := range m.RTasks {
 		if val.status == IDLE {
 			reduceTask = &ReduceTask{
 				IntermediateFiles: m.IntermediateFiles[k.(int)],
