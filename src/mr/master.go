@@ -45,7 +45,7 @@ func (m *Master) AcquireTask(args *AcquireTaskArgs, reply *AcquireTaskReply) err
 		m.WStatus[args.Wid] = "IDLE"
 	}
 
-	mapTask := m.PickMapTask()
+	mapTask := m.PickMapTask(args.Wid)
 
 	if mapTask != nil {
 		reply.MapTask = mapTask
@@ -62,7 +62,7 @@ func (m *Master) AcquireTask(args *AcquireTaskArgs, reply *AcquireTaskReply) err
 		return nil
 	}
 
-	reduceTask := m.PickReduceTask()
+	reduceTask := m.PickReduceTask(args.Wid)
 	if reduceTask != nil {
 		reply.ReduceTask = reduceTask
 		reply.Done = false
@@ -83,11 +83,14 @@ func (m *Master) MapTaskDone(args *MapTaskDoneArgs, reply *MapTaskDoneReply) err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.WStatus[args.Wid] = "IDLE"
-	m.MTasks[args.InputFile].status = COMPLETED
-	m.MTasks[args.InputFile].EndTs = time.Now().Unix()
-	for i := 0; i < m.nReducers; i++ {
-		m.IntermediateFiles[i] = append(m.IntermediateFiles[i], args.IntermediateFiles[i])
+	if m.MTasks[args.InputFile].status != COMPLETED {
+		m.MTasks[args.InputFile].status = COMPLETED
+		m.MTasks[args.InputFile].EndTs = time.Now().Unix()
+		for i := 0; i < m.nReducers; i++ {
+			m.IntermediateFiles[i] = append(m.IntermediateFiles[i], args.IntermediateFiles[i])
+		}
 	}
+
 	return nil
 }
 
@@ -95,8 +98,10 @@ func (m *Master) ReduceTaskDone(args *ReduceTaskDoneArgs, reply *ReduceTaskDoneR
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.WStatus[args.Wid] = "IDLE"
-	m.RTasks[args.ReduceNumber].EndTs = time.Now().Unix()
-	m.RTasks[args.ReduceNumber].status = COMPLETED
+	if m.RTasks[args.ReduceNumber].status != COMPLETED {
+		m.RTasks[args.ReduceNumber].EndTs = time.Now().Unix()
+		m.RTasks[args.ReduceNumber].status = COMPLETED
+	}
 	return nil
 }
 
@@ -131,7 +136,7 @@ func (m *Master) Done() bool {
 	return true
 }
 
-func (m *Master) PickMapTask() *MapTask {
+func (m *Master) PickMapTask(wid int) *MapTask {
 	var mapTask *MapTask = nil
 
 	for key, val := range m.MTasks {
@@ -143,7 +148,7 @@ func (m *Master) PickMapTask() *MapTask {
 				NReducers:     m.nReducers,
 			}
 			m.MapTaskNumber++
-			m.MTasks[filePath] = &TaskInfo{status: RUNNING, StartTs: time.Now().Unix()}
+			m.MTasks[filePath] = &TaskInfo{status: RUNNING, StartTs: time.Now().Unix(), wid: wid}
 			break
 		}
 	}
@@ -159,7 +164,7 @@ func (m *Master) CheckAllMapTasksDone() bool {
 	return true
 }
 
-func (m *Master) PickReduceTask() *ReduceTask {
+func (m *Master) PickReduceTask(wid int) *ReduceTask {
 	var reduceTask *ReduceTask = nil
 	for k, val := range m.RTasks {
 		if val.status == IDLE {
@@ -167,10 +172,54 @@ func (m *Master) PickReduceTask() *ReduceTask {
 				IntermediateFiles: m.IntermediateFiles[k.(int)],
 				ReduceNumber:      k.(int),
 			}
+			m.RTasks[k.(int)] = &TaskInfo{status: RUNNING, StartTs: time.Now().Unix(), wid: wid}
 			break
 		}
 	}
 	return reduceTask
+}
+
+func (m *Master) StartTaskMonitor() {
+	ticker := time.NewTicker(10 * time.Second)
+	go func() {
+		for {
+			select {
+			case t := <-ticker.C:
+				if m.Done() {
+					return
+				}
+				m.checkDeadTasks(t.Unix())
+			}
+		}
+	}()
+}
+
+func (m *Master) checkDeadTasks(checkTs int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k, v := range m.MTasks {
+		if v.status == RUNNING && (v.StartTs > -1 && checkTs-v.StartTs > 10) {
+			m.WStatus[m.MTasks[k].wid] = "DEAD"
+			m.MTasks[k] = &TaskInfo{
+				status:  IDLE,
+				wid:     -1,
+				StartTs: -1,
+				EndTs:   -1,
+			}
+		}
+	}
+
+	for k, v := range m.RTasks {
+		if v.status == RUNNING && (v.StartTs > -1 && checkTs-v.StartTs > 10) {
+			m.WStatus[m.RTasks[k].wid] = "DEAD"
+			m.RTasks[k] = &TaskInfo{
+				status:  IDLE,
+				wid:     -1,
+				StartTs: -1,
+				EndTs:   -1,
+			}
+		}
+	}
 }
 
 //
@@ -191,8 +240,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 	for i := 0; i < nReduce; i++ {
 		m.RTasks[i] = &TaskInfo{status: IDLE, StartTs: -1, EndTs: -1}
 	}
-	// Your code here.
-
+	m.StartTaskMonitor()
 	m.server()
 	return &m
 }
