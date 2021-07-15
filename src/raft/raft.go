@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"log"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -167,28 +166,43 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	// if current term is greater reject the RPC
-	if rf.currentTerm > args.Term {
-		reply.Term = rf.currentTerm
-		reply.VoteGranted = false
+	reply.Term = rf.currentTerm
+	reply.VoteGranted = false
+
+	if args.Term < rf.currentTerm {
 		return
 	}
 
-	// If current term is less or if current term is equal and not voted
-	if rf.currentTerm < args.Term {
-		log.Printf("Voting for the term %d Me :%d, VotedFor: %d, RequestedFrom %d\n", args.Term, rf.me, args.CandidateId, args.CandidateId)
+	if args.Term > rf.currentTerm {
+		rf.state = CANDIDATE
 		rf.votedFor = -1
 		rf.currentTerm = args.Term
-		rf.state = FOLLOWER
 	}
 
-	reply.Term = rf.currentTerm
+	if rf.votedFor < 0 || rf.votedFor == args.CandidateId {
 
-	if (rf.votedFor < 0 || rf.votedFor == args.CandidateId) && rf.isLogUpToDate(args.LastLogIndex, args.LastLogTerm) {
-		rf.votedFor = args.CandidateId
-		reply.VoteGranted = true
+		// Check is candidate is more up-to-date by
+		// 1. the term of last log entry is more up-to-date
+		// 2. if term of last log entry is same, whoever has more logs is more up-to-date
+		lastLogTerm := 0
+		if len(rf.logEntries) > 0 {
+			lastLogTerm = rf.logEntries[len(rf.logEntries)-1].Term
+		}
+
+		if args.LastLogTerm > lastLogTerm {
+			reply.VoteGranted = true
+			rf.votedFor = args.CandidateId
+			DPrintf("server %v vote for %v is %v ", rf.me, args.CandidateId, reply.VoteGranted)
+			return
+		}
+
+		if args.LastLogTerm == lastLogTerm && len(rf.logEntries) <= args.LastLogIndex {
+			reply.VoteGranted = true
+			rf.votedFor = args.CandidateId
+			DPrintf("server %v vote for %v is %v ", rf.me, args.CandidateId, reply.VoteGranted)
+			return
+		}
 	}
-
 }
 
 func (rf *Raft) isLogUpToDate(cLastIndex int, cLastTerm int) bool {
