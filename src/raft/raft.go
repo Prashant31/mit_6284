@@ -261,7 +261,7 @@ type AppendEntriesReply struct {
 	Success bool
 }
 
-func (rf *Raft) broadcastHeartbeats() {
+func (rf *Raft) sendAppendEntries() {
 	rf.mu.Lock()
 	args := AppendEntriesRequest{
 		Term:         rf.currentTerm,
@@ -270,12 +270,11 @@ func (rf *Raft) broadcastHeartbeats() {
 		PrevLogTerm:  rf.getLastTerm(),
 	}
 	rf.mu.Unlock()
-	//ch := make(chan *AppendEntriesReply)
 	for idx := range rf.peers {
 		if idx != rf.me {
 			go func(peerIdx int) {
-				reply := &AppendEntriesReply{}
-				rf.sendAppendEntries(peerIdx, &args, reply)
+				reply := AppendEntriesReply{}
+				rf.peers[peerIdx].Call("Raft.AppendEntries", &args, &reply)
 			}(idx)
 		}
 	}
@@ -294,11 +293,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesRequest, reply *AppendEntriesRe
 	}
 	reply.Term = rf.currentTerm
 	reply.Success = false
-}
-
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesRequest, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	return ok
 }
 
 //
@@ -348,67 +342,72 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
-func (rf *Raft) StartTickers() {
-	for {
-		if rf.killed() {
-			return
-		}
-
+func (rf *Raft) ticker() {
+	for !rf.killed() {
 		select {
 		case <-rf.electionTimer.C:
 			DPrintf("server %v election timer fired", rf.me)
 
 			rf.mu.Lock()
 			rf.ResetElectionTimer()
-			if rf.state == LEADER {
+			if rf.state == LEADER { // Do not start election on leader
 				rf.mu.Unlock()
 				break
 			}
+
 			DPrintf("server %v starting election", rf.me)
+
+			rf.state = CANDIDATE // set state to candidate
+			rf.currentTerm++
 			rf.votedFor = rf.me
-			rf.currentTerm += 1
-			rf.state = CANDIDATE
-			log.Printf("Starting election by peer [%d] for term [%d]\n", rf.me, rf.currentTerm)
-			args := RequestVoteArgs{
+			// Send vote request
+			voteReceived := 1
+			voteGranted := 1
+			voteResultChan := make(chan bool)
+			lastLogTerm := 0
+
+			if len(rf.logEntries) > 0 {
+				lastLogTerm = rf.logEntries[len(rf.logEntries)-1].Term
+			}
+
+			voteArgs := RequestVoteArgs{
 				Term:         rf.currentTerm,
 				CandidateId:  rf.me,
-				LastLogIndex: rf.getLastIndex(),
-				LastLogTerm:  rf.getLastTerm(),
+				LastLogIndex: len(rf.logEntries),
+				LastLogTerm:  lastLogTerm,
 			}
 			rf.mu.Unlock()
-			voteCount := 1
-			voteGrants := 1
-			ch := make(chan bool)
-			for idx := range rf.peers {
-				if idx != rf.me {
-					go func(peerIdx int) {
-						reply := &RequestVoteReply{}
-						ok := rf.sendRequestVote(peerIdx, &args, reply)
-						//log.Printf("Response received for peer [%d] for term [%d] from [%d]\n", rf.me, args.Term, peerIdx)
-						if ok {
-							ch <- reply.VoteGranted
-						} else {
-							log.Printf("Vote Request Failed to peer [%d] for term [%d] from [%d]\n", peerIdx, args.Term, args.CandidateId)
-							ch <- false
-						}
-					}(idx)
+			for peer := 0; peer < len(rf.peers); peer++ {
+				if peer == rf.me {
+					continue
 				}
+				go func(peerId int) {
+					// DPrintf("server %v sending request vote to peer %v", rf.me, peerId)
+					voteReply := RequestVoteReply{}
+					ok := rf.sendRequestVote(peerId, &voteArgs, &voteReply)
+					if ok {
+						voteResultChan <- voteReply.VoteGranted
+					} else {
+						voteResultChan <- false
+					}
+				}(peer)
 			}
 
 			for {
-				result := <-ch
-				voteCount++
+				result := <-voteResultChan
+				voteReceived++
 				if result {
-					voteGrants++
+					voteGranted++
 				}
-				if voteGrants > len(rf.peers)/2 {
+				if voteGranted > len(rf.peers)/2 {
 					break
 				}
-				if voteCount > len(rf.peers) {
+				if voteReceived >= len(rf.peers) {
 					break
 				}
 			}
 
+			// if state changed during election, ignore the couting
 			rf.mu.Lock()
 			if rf.state != CANDIDATE {
 				DPrintf("Server %v is no longer candidate", rf.me)
@@ -418,13 +417,13 @@ func (rf *Raft) StartTickers() {
 			rf.mu.Unlock()
 
 			// If won election, immediately send out authorities
-			if voteGrants > len(rf.peers)/2 {
+			if voteGranted > len(rf.peers)/2 {
 				rf.mu.Lock()
 				rf.state = LEADER
 				rf.ResetElectionTimer()
 				rf.mu.Unlock()
-				DPrintf("server %v won the election for term %v with %v votes", rf.me, rf.currentTerm, voteGrants)
-				rf.broadcastHeartbeats()
+				DPrintf("server %v won the election for term %v with %v votes", rf.me, rf.currentTerm, voteGranted)
+				rf.sendAppendEntries()
 			}
 
 		case <-rf.heartbeatTicker.C:
@@ -434,11 +433,9 @@ func (rf *Raft) StartTickers() {
 			rf.mu.Unlock()
 			if state == LEADER { // Only send heartbeat if is leader
 				DPrintf("leader %v heartbeatTicker tick", rf.me)
-				rf.broadcastHeartbeats()
+				rf.sendAppendEntries()
 			}
-
 		}
-
 	}
 }
 
@@ -485,7 +482,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	go rf.StartTickers()
+	go rf.ticker()
 
 	return rf
 }
