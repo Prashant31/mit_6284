@@ -216,11 +216,11 @@ func (rf *Raft) isLogUpToDate(cLastIndex int, cLastTerm int) bool {
 }
 
 func (rf *Raft) getLastIndex() int {
-	return len(rf.logEntries) - 1
+	return len(rf.logEntries)
 }
 
 func (rf *Raft) getLastTerm() int {
-	if rf.getLastIndex() == -1 {
+	if rf.getLastIndex() == 0 {
 		return 0
 	}
 	return rf.logEntries[rf.getLastIndex()].Term
@@ -378,17 +378,12 @@ func (rf *Raft) ticker() {
 			voteReceived := 1
 			voteGranted := 1
 			voteResultChan := make(chan bool)
-			lastLogTerm := 0
-
-			if len(rf.logEntries) > 0 {
-				lastLogTerm = rf.logEntries[len(rf.logEntries)-1].Term
-			}
 
 			voteArgs := RequestVoteArgs{
 				Term:         rf.currentTerm,
 				CandidateId:  rf.me,
-				LastLogIndex: len(rf.logEntries),
-				LastLogTerm:  lastLogTerm,
+				LastLogIndex: rf.getLastIndex(),
+				LastLogTerm:  rf.getLastTerm(),
 			}
 			rf.mu.Unlock()
 			for peer := 0; peer < len(rf.peers); peer++ {
