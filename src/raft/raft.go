@@ -179,29 +179,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 	}
 
-	if rf.votedFor < 0 || rf.votedFor == args.CandidateId {
-
-		// Check is candidate is more up-to-date by
-		// 1. the term of last log entry is more up-to-date
-		// 2. if term of last log entry is same, whoever has more logs is more up-to-date
-		lastLogTerm := 0
-		if len(rf.logEntries) > 0 {
-			lastLogTerm = rf.logEntries[len(rf.logEntries)-1].Term
-		}
-
-		if args.LastLogTerm > lastLogTerm {
-			reply.VoteGranted = true
-			rf.votedFor = args.CandidateId
-			DPrintf("server %v vote for %v is %v ", rf.me, args.CandidateId, reply.VoteGranted)
-			return
-		}
-
-		if args.LastLogTerm == lastLogTerm && len(rf.logEntries) <= args.LastLogIndex {
-			reply.VoteGranted = true
-			rf.votedFor = args.CandidateId
-			DPrintf("server %v vote for %v is %v ", rf.me, args.CandidateId, reply.VoteGranted)
-			return
-		}
+	if rf.votedFor < 0 || rf.votedFor == args.CandidateId && rf.isLogUpToDate(args.LastLogIndex, args.LastLogTerm) {
+		reply.VoteGranted = true
+		rf.votedFor = args.CandidateId
+		DPrintf("server %v vote for %v is %v ", rf.me, args.CandidateId, reply.VoteGranted)
 	}
 }
 
