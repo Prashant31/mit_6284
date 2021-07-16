@@ -174,9 +174,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	if args.Term > rf.currentTerm {
-		rf.state = CANDIDATE
+		rf.state = FOLLOWER
 		rf.votedFor = -1
 		rf.currentTerm = args.Term
+		rf.ResetElectionTimer()
 	}
 
 	if rf.votedFor < 0 || rf.votedFor == args.CandidateId && rf.isLogUpToDate(args.LastLogIndex, args.LastLogTerm) {
