@@ -8,7 +8,10 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
+import (
+	"log"
+	"testing"
+)
 import "fmt"
 import "time"
 import "math/rand"
@@ -341,6 +344,7 @@ func TestRejoin2B(t *testing.T) {
 
 	// leader network failure
 	leader1 := cfg.checkOneLeader()
+	log.Printf("Disconnecting Leader1 : %d\n", leader1)
 	cfg.disconnect(leader1)
 
 	// make old leader try to agree on some entries
@@ -353,14 +357,17 @@ func TestRejoin2B(t *testing.T) {
 
 	// new leader network failure
 	leader2 := cfg.checkOneLeader()
+	log.Printf("Disconnecting Leader2 : %d\n", leader2)
 	cfg.disconnect(leader2)
-
 	// old leader connected again
+
+	log.Printf("Connecting Leader1 Again : %d\n", leader1)
 	cfg.connect(leader1)
 
 	cfg.one(104, 2, true)
 
 	// all together now
+	log.Printf("Connecting Leader2 Again : %d\n", leader1)
 	cfg.connect(leader2)
 
 	cfg.one(105, servers, true)
@@ -405,28 +412,36 @@ func TestBackup2B(t *testing.T) {
 
 	// now another partitioned leader and one follower
 	leader2 := cfg.checkOneLeader()
+	log.Printf("Leader 2.......%d, Connected %v\n", leader2, cfg.connected)
 	other := (leader1 + 2) % servers
 	if leader2 == other {
 		other = (leader2 + 1) % servers
 	}
 	cfg.disconnect(other)
-
+	log.Printf("Disconnecting others, Connected %v\n", cfg.connected)
 	// lots more commands that won't commit
 	for i := 0; i < 50; i++ {
 		cfg.rafts[leader2].Start(rand.Int())
 	}
-
+	log.Printf("Send 50 entried which will not commit to %d,  %v\n", leader2, cfg.connected)
 	time.Sleep(RaftElectionTimeout / 2)
 
 	// bring original leader back to life,
 	for i := 0; i < servers; i++ {
 		cfg.disconnect(i)
 	}
+	log.Printf("Disconnecting All......%v", cfg.connected)
+
+	log.Printf("Connecting Servers......")
 	cfg.connect((leader1 + 0) % servers)
+	log.Printf("Connecting Servers......%d, %v\n", (leader1+0)%servers, cfg.connected)
 	cfg.connect((leader1 + 1) % servers)
+	log.Printf("Connecting Servers......%d, %v\n", (leader1+1)%servers, cfg.connected)
 	cfg.connect(other)
+	log.Printf("Connecting Servers......%d, %v\n", other, cfg.connected)
 
 	// lots of successful commands to new group.
+	log.Printf("Sending Commands to new group Servers......")
 	for i := 0; i < 50; i++ {
 		cfg.one(rand.Int(), 3, true)
 	}
