@@ -791,6 +791,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 	cfg.one(rand.Int()%10000, 1, true)
 
+	//log.Printf("Leader Found %d\n", ll)
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
 		if iters == 200 {
@@ -803,16 +804,16 @@ func TestFigure8Unreliable2C(t *testing.T) {
 				leader = i
 			}
 		}
-
 		if (rand.Int() % 1000) < 100 {
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		} else {
-			ms := (rand.Int63() % 13)
+			ms := rand.Int63() % 13
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		}
 
 		if leader != -1 && (rand.Int()%1000) < int(RaftElectionTimeout/time.Millisecond)/2 {
+			log.Printf("Disconected Leader..... %d\n", leader)
 			cfg.disconnect(leader)
 			nup -= 1
 		}
