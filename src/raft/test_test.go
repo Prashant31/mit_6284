@@ -813,7 +813,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		}
 
 		if leader != -1 && (rand.Int()%1000) < int(RaftElectionTimeout/time.Millisecond)/2 {
-			log.Printf("Disconected Leader..... %d\n", leader)
+			//log.Printf("Disconected Leader..... %d\n", leader)
 			cfg.disconnect(leader)
 			nup -= 1
 		}
