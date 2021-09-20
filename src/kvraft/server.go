@@ -7,6 +7,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const Debug = 0
@@ -22,6 +23,11 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Type      string
+	Key       string
+	Value     string
+	ClientId  int64
+	RequestId int64
 }
 
 type KVServer struct {
@@ -34,14 +40,66 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	ops         map[int]chan Op
+	data        map[string]string
+	lastApplied map[int64]int64
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	op := Op{
+		Type:      "Get",
+		Key:       args.Key,
+		ClientId:  args.ClientId,
+		RequestId: args.RequestId,
+	}
+	ok, op := kv.waitForOp(op)
+	if !ok {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	reply.Err = OK
+	reply.Value = op.Value
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	op := Op{
+		Type:      args.Op,
+		Key:       args.Key,
+		Value:     args.Value,
+		ClientId:  args.ClientId,
+		RequestId: args.RequestId,
+	}
+	ok, _ := kv.waitForOp(op)
+	if !ok {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	reply.Err = OK
+}
+
+func (kv *KVServer) waitForOp(op Op) (bool, Op) {
+	idx, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		return false, op
+	}
+	kv.mu.Lock()
+	opChan, ok := kv.ops[idx]
+	if !ok {
+		opChan = make(chan Op, 1)
+		kv.ops[idx] = opChan
+	}
+	kv.mu.Unlock()
+	select {
+	case appliedOP := <-opChan:
+		return kv.isSameOp(op, appliedOP), appliedOP
+	case <-time.After(600 * time.Millisecond):
+		return false, op
+	}
+}
+
+func (kv *KVServer) isSameOp(issued Op, applied Op) bool {
+	return issued.ClientId == applied.ClientId &&
+		issued.RequestId == applied.RequestId
 }
 
 //
@@ -63,6 +121,49 @@ func (kv *KVServer) Kill() {
 func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
+}
+
+func (kv *KVServer) StartApplier() {
+	for {
+		applyMsg := <-kv.applyCh
+		if !applyMsg.CommandValid {
+			continue
+		}
+
+		index := applyMsg.CommandIndex
+		op := applyMsg.Command.(Op)
+
+		kv.mu.Lock()
+		if op.Type == "Get" {
+			op.Value = kv.data[op.Key]
+		} else {
+			lastIndex, ok := kv.lastApplied[op.ClientId]
+			// !ok means we have not seen this request before and hence we just apply it
+
+			// op.RequestId > lastIndex : This is important check
+			// This happens when the raft leader have replicated the log entry but died before reponding to the client
+			// Now the new ly elected raft leader has applied that to the state machine
+			// But client assumes the server died/timedout etc and send the same request back
+			// Now the stage machine should just ignore this entry from the log and should not apply to state machine
+			if !ok || op.RequestId > lastIndex {
+				if op.Type == "Put" {
+					kv.data[op.Key] = op.Value
+				} else {
+					kv.data[op.Key] = kv.data[op.Key] + op.Value
+				}
+				kv.lastApplied[op.ClientId] = op.RequestId
+			}
+		}
+		// []ops Acts a storage for the operation
+		// In case of duplicate requests we just take the ops from the already computed value and return
+		opCh, ok := kv.ops[index]
+		if !ok {
+			opCh = make(chan Op, 1)
+			kv.ops[index] = opCh
+		}
+		opCh <- op
+		kv.mu.Unlock()
+	}
 }
 
 //
@@ -89,11 +190,14 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
+	kv.data = make(map[string]string)
+	kv.ops = make(map[int]chan Op)
+	kv.lastApplied = make(map[int64]int64)
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
-
+	go kv.StartApplier()
 	return kv
 }
